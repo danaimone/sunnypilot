@@ -125,7 +125,12 @@ class ModularAssistiveDrivingSystem:
         if self.events.has(EventName.seatbeltNotLatched):
           self.replace_event(EventName.seatbeltNotLatched, EventNameSP.silentSeatbeltNotLatched)
           self.transition_paused_state()
-      if self.events.has(EventName.wrongGear) and (CS.vEgo < 2.5 or CS.gearShifter == GearShifter.reverse):
+      if CS.gearShifter == GearShifter.park:
+        # shifting to Park fully disengages MADS; must re-enable after returning to Drive
+        if self.events.has(EventName.wrongGear):
+          self.replace_event(EventName.wrongGear, EventNameSP.silentWrongGear)
+        self.events_sp.add(EventNameSP.lkasDisable)
+      elif self.events.has(EventName.wrongGear) and (CS.vEgo < 2.5 or CS.gearShifter == GearShifter.reverse):
         self.replace_event(EventName.wrongGear, EventNameSP.silentWrongGear)
         self.transition_paused_state()
       if self.events.has(EventName.reverseGear):
