@@ -23,6 +23,7 @@ from openpilot.system.hardware.hw import Paths
 from openpilot.system.hardware import PC
 
 from openpilot.sunnypilot.system.params_migration import run_migration
+from openpilot.sunnypilot.selfdrive.car.subaru_startup_preferences import IgnitionCycleTracker, read_boot_id
 
 
 def manager_init() -> None:
@@ -144,6 +145,7 @@ def manager_thread() -> None:
 
   started_prev = False
   ignition_prev = False
+  startup_preferences_ignition = IgnitionCycleTracker(read_boot_id())
 
   while True:
     sm.update(1000)
@@ -158,6 +160,11 @@ def manager_thread() -> None:
     ignition = any(ps.ignitionLine or ps.ignitionCan for ps in sm['pandaStates'] if ps.pandaType != log.PandaState.PandaType.unknown)
     if ignition and not ignition_prev:
       params.clear_all(ParamKeyFlag.CLEAR_ON_IGNITION_ON)
+
+    if sm.updated['pandaStates']:
+      known_pandas = [ps for ps in sm['pandaStates'] if ps.pandaType != log.PandaState.PandaType.unknown]
+      confirmed_ignition = ignition if sm.valid['pandaStates'] and known_pandas else None
+      startup_preferences_ignition.update(confirmed_ignition, time.monotonic(), params)
 
     # update onroad params, which drives pandad's safety setter thread
     if started != started_prev:
