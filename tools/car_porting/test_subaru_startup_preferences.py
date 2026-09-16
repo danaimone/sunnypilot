@@ -224,3 +224,17 @@ class TestRequestPacket:
       data[0] = checksum(address, data)
       with pytest.raises(ValueError):
         request_packet(address, bytes(data))
+
+
+@pytest.mark.parametrize('address,frame,index,mask', [
+  (0x390, '90061187845a8100', 6, 0x40),
+  (0x6BB, '6d09000100802200', 2, 0x02),
+])
+def test_crosstrek_capture_templates_preserve_unrelated_bits(address, frame, index, mask):
+  original = bytes.fromhex(frame)
+  packet = request_packet(address, original)
+  assert packet[0] == checksum(address, packet)
+  assert packet[1] == (original[1] & 0xf0) | ((original[1] + 1) & 0xf)
+  assert packet[index] == original[index] | mask
+  for i in set(range(8)) - {0, 1, index}:
+    assert packet[i] == original[i]

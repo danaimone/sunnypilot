@@ -49,7 +49,7 @@ def car_params():
 
 def panda_state(**kwargs):
   return SimpleNamespace(**({'ignitionLine': True, 'ignitionCan': False, 'safetyModel': 'subaru', 'safetyParam': 25,
-                            'safetyRxChecksInvalid': False} | kwargs))
+                            'safetyRxChecksInvalid': False, 'faults': [], 'heartbeatLost': False} | kwargs))
 
 
 def test_runtime_claims_cycle_once_before_safety_permission():
@@ -350,3 +350,22 @@ def test_failed_persistent_permission_removal_cannot_publish_cycle():
   IgnitionCycleTracker(BOOT_B).update(True, 30, params)
   assert params.get('SubaruStartupPreferencesCycle') is None
   assert params.get('SubaruStartupPreferencesArmedBoot') == BOOT_A
+
+
+@pytest.mark.parametrize('platform', ['SUBARU_OUTBACK_2023', 'SUBARU_CROSSTREK_2026'])
+def test_supported_platforms_require_opt_in(platform):
+  params, cp = ParamsMemory(), car_params()
+  cp.carFingerprint = platform
+  params.values['SubaruStartupPreferences'] = False
+  assert RuntimeStartupPreferences(params, cp, 12).policy is None
+  params.values['SubaruStartupPreferences'] = True
+  assert RuntimeStartupPreferences(params, cp, 12).policy is not None
+  assert cp.safetyConfigs[0].safetyParam == 25
+
+
+@pytest.mark.parametrize('state', [panda_state(faults=['interruptRateCan2']), panda_state(heartbeatLost=True)])
+def test_hardware_fault_aborts_cycle(state):
+  runtime = RuntimeStartupPreferences(ParamsMemory(), car_params(), 12)
+  assert runtime.update(25, True, True, [state]) == []
+  assert runtime.policy.aborted
+  assert runtime.update(26, True, True, [panda_state()]) == []

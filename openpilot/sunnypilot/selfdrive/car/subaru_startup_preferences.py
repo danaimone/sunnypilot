@@ -102,7 +102,7 @@ class RuntimeStartupPreferences:
     self.policy = None
     self.safety_ready_since = None
     supported = (
-      str(CP.carFingerprint) == 'SUBARU_OUTBACK_2023'
+      str(CP.carFingerprint) in ('SUBARU_OUTBACK_2023', 'SUBARU_CROSSTREK_2026')
       and not CP.passive
       and not CP.openpilotLongitudinalControl
       and len(CP.safetyConfigs) == 1
@@ -137,6 +137,12 @@ class RuntimeStartupPreferences:
       self.policy.stable_since = None
       return []
     panda = pandas[0]
+    # A diagnostic fault can remain latched after normal CAN traffic resumes.
+    # Skip this ignition cycle rather than issuing convenience requests on it.
+    if panda.faults or panda.heartbeatLost:
+      self.policy.aborted = True
+      self.safety_ready_since = None
+      return []
     if not (panda.ignitionLine or panda.ignitionCan):
       self.policy.aborted = True
       return []
