@@ -148,12 +148,13 @@ class RuntimeStartupPreferences:
     # Panda enforces its own 10-second window from safety initialization. Wait
     # from the first observed matching panda state so our one attempt isn't
     # consumed before that hardware gate opens.
-    if now - self.safety_ready_since < 10:
-      return []
     if panda.safetyRxChecksInvalid:
       self.policy.stable_since = None
       return []
-    return [(p.address, p.data, p.bus) for p in self.policy.update(now)]
+    # Observe the parked stability interval during the hardware wait, rather
+    # than adding three seconds afterward and exhausting a cold-start cycle.
+    ready = now - self.safety_ready_since >= 10
+    return [(p.address, p.data, p.bus) for p in self.policy.update(now, requests_allowed=ready)]
 
 
 def checksum(address: int, data: bytes) -> int:
@@ -247,7 +248,7 @@ class StartupPreferences:
     if address == STOP_REQUEST and data[6] & 0x40 and address not in self.pending:
       self.settled[address] = "manual override"
 
-  def update(self, now: float) -> list[Proposal]:
+  def update(self, now: float, *, requests_allowed: bool = True) -> list[Proposal]:
     if self.last_time is not None and now < self.last_time:
       self.aborted = True
     self.last_time = now
@@ -275,7 +276,7 @@ class StartupPreferences:
       return []
     if self.stable_since is None:
       self.stable_since = now
-    if now - self.started < 10 or now - self.stable_since < 3:
+    if not requests_allowed or now - self.started < 10 or now - self.stable_since < 3:
       return []
 
     desired = {AVH_REQUEST: bool(data[AVH_STATUS][5] & 0x20), STOP_REQUEST: data[STOP_STATUS][4] == 0xC0}

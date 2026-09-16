@@ -15,9 +15,9 @@ class PolicySpy:
     self.observe_calls = []
     self.result = []
 
-  def update(self, now):
-    self.update_calls.append(now)
-    return self.result
+  def update(self, now, *, requests_allowed=True):
+    self.update_calls.append((now, requests_allowed))
+    return self.result if requests_allowed else []
 
   def observe(self, *args):
     self.observe_calls.append(args)
@@ -99,9 +99,41 @@ def test_no_request_before_hardware_mode_is_stable():
   assert runtime.update(12, True, True, [panda_state(safetyParam=9)]) == []
   assert runtime.update(14, True, True, [panda_state()]) == []
   assert runtime.update(23.9, True, True, [panda_state()]) == []
-  assert runtime.policy.update_calls == []
+  assert runtime.policy.update_calls == [(14, False), (23.9, False)]
   assert runtime.update(24, True, True, [panda_state()]) == [(0x6BB, b'12345678', 1)]
-  assert runtime.policy.update_calls == [24]
+  assert runtime.policy.update_calls == [(14, False), (23.9, False), (24, True)]
+
+
+@pytest.mark.parametrize('invalidate_before_ready', [False, True])
+def test_late_cold_start_checks_stability_during_hardware_wait(invalidate_before_ready):
+  from openpilot.sunnypilot.selfdrive.car.subaru_startup_preferences import (
+    AVH_REQUEST, BUS, GEAR, REQUIRED, STOP_STATUS, THROTTLE, checksum,
+  )
+  # Ignition at 10; matching hardware arrives at 27. Waiting another 10 + 3
+  # seconds would leave no time inside the unchanged 30-second deadline.
+  runtime = RuntimeStartupPreferences(ParamsMemory(), car_params(), 26)
+  frames = {a: bytearray(8) for a in REQUIRED}
+  frames[GEAR][3] = 4
+  frames[THROTTLE][2:4] = (800).to_bytes(2, 'little')
+  frames[STOP_STATUS][2] = 8
+  proposals = []
+  for tick in range(270, 411):
+    now = tick / 10
+    for address, data in frames.items():
+      data[1] = (data[1] + 1) & 15
+      data[0] = checksum(address, data)
+    runtime.observe([(int(now * 1e9), [(a, bytes(d), BUS) for a, d in frames.items()])])
+    # Invalid data immediately before hardware readiness must still restart
+    # the three-second parked interval; that cycle then expires unsent.
+    invalid = invalidate_before_ready and now == 36.9
+    proposals.extend((now, packet) for packet in runtime.update(now, not invalid, True, [panda_state()]))
+  if not invalidate_before_ready:
+    assert proposals and proposals[0][0] == 37.0
+    assert proposals[0][1][0] == AVH_REQUEST
+    assert all(37 <= now <= 40 for now, _ in proposals)
+  else:
+    assert proposals == []
+  assert runtime.policy.aborted
 
 
 @pytest.mark.parametrize(
