@@ -226,6 +226,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"HyundaiLongitudinalTuning", {PERSISTENT | BACKUP, INT, "0"}},
     {"SubaruStopAndGo", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"SubaruStopAndGoManualParkingBrake", {PERSISTENT | BACKUP, BOOL, "0"}},
+    {"ShowBrakeStatus", {PERSISTENT | BACKUP, BOOL, "0"}},
     {"SubaruStartupPreferences", {PERSISTENT, BOOL, "0"}},
     {"SubaruStartupPreferencesArmedBoot", {PERSISTENT, STRING}},
     {"SubaruStartupPreferencesColdBoot", {PERSISTENT, BOOL, "0"}},

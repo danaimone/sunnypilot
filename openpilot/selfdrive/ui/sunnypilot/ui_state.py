@@ -47,6 +47,7 @@ class UIStateSP:
     self.chevron_metrics = None
     self.custom_interactive_timeout: int = 0
     self.developer_ui = None
+    self.show_brake_status: bool = False
     self.hide_v_ego_ui: bool = False
     self.onroad_brightness: int = 0
     self.onroad_brightness_timer: int = 0
@@ -144,6 +145,7 @@ class UIStateSP:
     return "disengaged"
 
   def update_params(self) -> None:
+    self.show_brake_status = self.params.get_bool("ShowBrakeStatus")
     CP_SP_bytes = self.params.get("CarParamsSPPersistent")
     if CP_SP_bytes is not None:
       self.CP_SP = messaging.log_from_bytes(CP_SP_bytes, custom.CarParamsSP)

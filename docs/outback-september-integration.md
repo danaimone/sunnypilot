@@ -89,10 +89,37 @@ the repository's configured LFS service and materialized for the build.
 The missing onset of the September 10 fault remains unresolved; this platform
 migration is not represented as a diagnosed repair for that incident.
 
-Vehicle-library candidate commit: `e3e2cb02` (paired by the application gitlink).
+Vehicle-library candidate commit: `11ca6f7f` (paired by the application gitlink).
 The application commit containing this report is the candidate application version.
 
 The macOS SDK also needed to be supplied to SCons default construction environments
 for panda tests, which create an independent environment. The runner used for this
 is retained with the build evidence; no upstream source changes were needed for
 this laptop-specific workaround.
+
+## Optional SubiPilot-inspired extras
+
+- **Show brake lights** is off by default. Enabling it in Toggles on comma 4
+  (Visuals on the standard UI) turns the speed digits red when fresh Subaru
+  brake-light commands are active. It includes driver and EyeSight braking,
+  requires valid/live car data, and clears on stale data. It reads existing
+  messages and does not change vehicle control or transmit CAN messages.
+- **Save drive logs** in comma 4 Device settings copies the latest recorded
+  route's remaining rlog/qlog files to `/data/diagnostics/routes/<route>-logs.tar`.
+  It is available only off-road with ignition off, rejects recording locks and
+  changing logs, omits video, preserves the source, and reserves recorder space.
+  Archives survive routine route cleanup; retrieve and remove them manually.
+  This is a manual archive, not automatic fault capture. Logs already deleted
+  cannot be recovered by this button.
+- For a particular older route, the same tool supports:
+  `python -m openpilot.sunnypilot.diagnostics.route_archive --list`, then
+  `python -m openpilot.sunnypilot.diagnostics.route_archive --route ROUTE_ID`.
+
+Extras validation: 15 focused tests passed, including real CAN decoding through
+Outback CarState, stale data, display eligibility/serialization, archive content,
+recording locks, insufficient space, changed logs, write failure cleanup and
+symlink rejection. Rebuilt the native Params library and C++ message schema;
+UI imports and a real preference write/read passed using the locked graphics
+package. Python lint and whitespace checks passed. Touchscreen appearance and
+operation still require device validation. These extras are local candidate
+changes and have not been installed on the comma.

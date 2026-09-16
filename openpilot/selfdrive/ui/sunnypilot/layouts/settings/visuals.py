@@ -28,6 +28,11 @@ class VisualsLayout(Widget):
 
   def _initialize_items(self):
     self._toggle_defs = {
+      "ShowBrakeStatus": (
+        lambda: tr("Show Brake Lights"),
+        tr("Turn the displayed speed red when supported vehicle brake-light signals are on."),
+        None,
+      ),
       "BlindSpot": (
         lambda: tr("Show Blind Spot Warnings"),
         tr("Enabling this will display warnings when a vehicle is detected in your " +

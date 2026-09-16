@@ -1,4 +1,7 @@
 import os
+import threading
+from openpilot.common.hardware.hw import Paths
+from openpilot.sunnypilot.diagnostics.route_archive import export_route
 import pyray as rl
 from collections.abc import Callable
 
@@ -161,6 +164,12 @@ class DeviceLayoutMici(NavScroller):
     super().__init__()
 
     self._fcc_dialog: MiciFccModal | None = None
+    self._save_logs_thread = None
+    self._save_logs_result = None
+    self._save_logs_btn = BigButton("save drive logs", "latest drive · no video")
+    self._save_logs_btn.set_click_callback(self._save_drive_logs)
+    self._save_logs_btn.set_enabled(lambda: not ui_state.ignition and not ui_state.started and
+                                    (self._save_logs_thread is None or not self._save_logs_thread.is_alive()))
 
     def power_off_callback():
       ui_state.params.put_bool("DoShutdown", True, block=True)
@@ -203,6 +212,7 @@ class DeviceLayoutMici(NavScroller):
     self._scroller.add_widgets([
       DeviceInfoLayoutMici(),
       PairBigButton(),
+      self._save_logs_btn,
       review_training_guide_btn,
       cabin_cam_btn,
       terms_btn,
@@ -211,6 +221,29 @@ class DeviceLayoutMici(NavScroller):
       reboot_btn,
       self._power_off_btn,
     ])
+
+  def _save_drive_logs(self):
+    if ui_state.ignition or ui_state.started or (self._save_logs_thread and self._save_logs_thread.is_alive()):
+      return
+    self._save_logs_btn.set_value("saving…")
+
+    def save():
+      try:
+        export_route(Paths.log_root(), '/data/diagnostics/routes')
+        self._save_logs_result = ("drive logs saved", "A separate diagnostic copy is saved on this device. Videos are not included.")
+      except (OSError, ValueError) as error:
+        self._save_logs_result = ("could not save logs", str(error))
+
+    self._save_logs_thread = threading.Thread(target=save, daemon=True)
+    self._save_logs_thread.start()
+
+  def _update_state(self):
+    super()._update_state()
+    if self._save_logs_result is not None:
+      title, detail = self._save_logs_result
+      self._save_logs_result = None
+      self._save_logs_btn.set_value("latest drive · no video")
+      gui_app.push_widget(BigDialog(title, detail))
 
   def _on_regulatory(self):
     if not self._fcc_dialog:
