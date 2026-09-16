@@ -24,6 +24,7 @@ from openpilot.selfdrive.car.helpers import convert_carControlSP, convert_to_cap
 
 from openpilot.sunnypilot.mads.helpers import set_alternative_experience, set_car_specific_params
 from openpilot.sunnypilot.selfdrive.car import interfaces as sunnypilot_interfaces
+from openpilot.sunnypilot.selfdrive.car.subaru_startup_preferences import RuntimeStartupPreferences
 
 REPLAY = "REPLAY" in os.environ
 
@@ -159,6 +160,8 @@ class Car:
         else:
           cloudlog.warning("Saved SecOC key is invalid")
 
+    self.startup_preferences = RuntimeStartupPreferences(self.params, self.CP, time.monotonic(), replay_mode=REPLAY)
+
     # Write previous route's CarParams
     prev_cp = self.params.get("CarParamsPersistent")
     if prev_cp is not None:
@@ -194,6 +197,7 @@ class Car:
 
     can_strs = messaging.drain_sock_raw(self.can_sock, wait_for_one=True)
     can_list = can_capnp_to_list(can_strs)
+    self.startup_preferences.observe(can_list)
 
     # Update carState from CAN
     CS, CS_SP = self.CI.update(can_list)
@@ -281,6 +285,8 @@ class Car:
       # send car controls over can
       now_nanos = self.can_log_mono_time if REPLAY else int(time.monotonic() * 1e9)
       self.last_actuators_output, can_sends = self.CI.apply(CC, convert_carControlSP(CC_SP), now_nanos)
+      can_sends.extend(self.startup_preferences.update(now_nanos / 1e9, CS.canValid,
+                                                     self.sm.all_checks(['pandaStates']), self.sm['pandaStates']))
       self.pm.send('sendcan', can_list_to_can_capnp(can_sends, msgtype='sendcan', valid=CS.canValid))
 
       self.CC_prev = CC
