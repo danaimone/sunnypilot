@@ -56,6 +56,22 @@ class TestStartupPreferences:
     self.step()
     assert set(self.policy.settled.values()) == {'acknowledged'}
 
+  def test_old_host_template_waits_without_consuming_attempt(self):
+    self.frames[AVH_STATUS][5] = 32
+    self.advance(10)
+    self.now = 10.1
+    for address, data in self.frames.items():
+      data[1] = (data[1] + 1) & 15
+      data[0] = checksum(address, data)
+      # Recorded failed request used a 22.94 ms old host template. It must
+      # wait for another factory frame, leaving panda's 30 ms gate unchanged.
+      stamp = self.now - .02294 if address == STOP_REQUEST else self.now
+      self.policy.observe(address, bytes(data), BUS, stamp)
+    assert self.policy.update(self.now) == []
+    assert STOP_REQUEST not in self.policy.pending
+    assert STOP_REQUEST not in self.policy.settled
+    assert [p.address for p in self.step(.08)] == [STOP_REQUEST]
+
   def test_already_correct_and_later_manual_changes(self):
     self.frames[AVH_STATUS][5] = 32
     self.frames[STOP_STATUS][4] = 192

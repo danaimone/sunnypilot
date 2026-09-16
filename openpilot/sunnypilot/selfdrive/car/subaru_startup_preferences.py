@@ -16,6 +16,9 @@ GEAR = 0x48
 WHEELS = 0x13A
 REQUIRED = (AVH_REQUEST, STOP_REQUEST, AVH_STATUS, STOP_STATUS, THROTTLE, GEAR, WHEELS)
 SAFETY_FLAG = 16
+# Panda allows 30 ms from physical RX to TX. Host timestamps arrive later;
+# reserve 20 ms for receive buffering, scheduling and transport back to panda.
+MAX_HOST_TEMPLATE_AGE = 0.010
 
 
 def valid_boot_id(value):
@@ -303,7 +306,7 @@ class StartupPreferences:
       # Only the demonstrated start-stop enabled value may trigger a toggle.
       if address == STOP_REQUEST and data[STOP_STATUS][4] != 0:
         continue
-      if self.pending or now - self.frames[address][0] > 0.03:
+      if self.pending or now - self.frames[address][0] > MAX_HOST_TEMPLATE_AGE:
         continue
       if (data[AVH_REQUEST][2] & 3) or (data[STOP_REQUEST][6] & 0x40):
         continue
