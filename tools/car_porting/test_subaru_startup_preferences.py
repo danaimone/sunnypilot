@@ -144,14 +144,13 @@ class TestStartupPreferences:
     assert not self.proposals and not self.policy.aborted
 
   @pytest.mark.parametrize('bit', [12, 25, 38, 51])
-  def test_each_wheel_speed_cap(self, bit):
+  @pytest.mark.parametrize('speed', [1, 350, 351, 1000, 8191])
+  def test_drive_motion_does_not_cancel_startup(self, bit, speed):
     self.frames[GEAR][3] = 121
-    self.frames[WHEELS] = bytearray((351 << bit).to_bytes(8, 'little'))
-    self.advance(35)
-    assert not self.proposals
-    self.frames[WHEELS] = bytearray((350 << bit).to_bytes(8, 'little'))
-    self.advance(39)
-    assert self.proposals
+    self.frames[THROTTLE][4] = 20
+    self.frames[WHEELS] = bytearray((speed << bit).to_bytes(8, 'little'))
+    self.advance(15)
+    assert self.proposals and not self.policy.aborted
 
   def test_engine_not_ready(self):
     self.frames[THROTTLE][2:4] = (0).to_bytes(2, 'little')

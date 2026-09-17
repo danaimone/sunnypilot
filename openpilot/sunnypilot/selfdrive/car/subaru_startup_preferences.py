@@ -17,7 +17,6 @@ WHEELS = 0x13A
 REQUIRED = (AVH_REQUEST, STOP_REQUEST, AVH_STATUS, STOP_STATUS, THROTTLE, GEAR, WHEELS)
 SAFETY_FLAG = 16
 STARTUP_WINDOW = 120
-MAX_DRIVE_AWAY_WHEEL_RAW = 350  # 19.95 km/h, 0.057 km/h per unit
 # Panda allows 30 ms from physical RX to TX. Host timestamps arrive later;
 # reserve 20 ms for receive buffering, scheduling and transport back to panda.
 MAX_HOST_TEMPLATE_AGE = 0.010
@@ -270,7 +269,7 @@ class StartupPreferences:
     wheel_bits = int.from_bytes(data[WHEELS], 'little')
     wheel_speeds = [(wheel_bits >> bit) & 0x1FFF for bit in (12, 25, 38, 51)]
     parked = data[GEAR][3] == 4 and not any(wheel_speeds) and data[THROTTLE][4] == 0
-    driving_away = data[GEAR][3] == 121 and max(wheel_speeds) <= MAX_DRIVE_AWAY_WHEEL_RAW
+    driving_away = data[GEAR][3] == 121
     if not (parked or driving_away):
       self.stable_since = None
       self.avh_followup = None
