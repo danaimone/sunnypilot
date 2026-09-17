@@ -16,6 +16,8 @@ GEAR = 0x48
 WHEELS = 0x13A
 REQUIRED = (AVH_REQUEST, STOP_REQUEST, AVH_STATUS, STOP_STATUS, THROTTLE, GEAR, WHEELS)
 SAFETY_FLAG = 16
+STARTUP_WINDOW = 120
+MAX_DRIVE_AWAY_WHEEL_RAW = 350  # 19.95 km/h, 0.057 km/h per unit
 # Panda allows 30 ms from physical RX to TX. Host timestamps arrive later;
 # reserve 20 ms for receive buffering, scheduling and transport back to panda.
 MAX_HOST_TEMPLATE_AGE = 0.010
@@ -241,12 +243,6 @@ class StartupPreferences:
     if previous and (data[1] & 15) == (previous[1][1] & 15):
       return
     self.frames[address] = (now, data, sequential)
-    if address == GEAR and data[3] in (2, 3, 121, 137, 145, 153, 161, 169, 177):
-      self.aborted = True
-    if address == THROTTLE and data[4] != 0:
-      self.aborted = True
-    if address == WHEELS and any((int.from_bytes(data, 'little') >> bit) & 0x1FFF for bit in (12, 25, 38, 51)):
-      self.aborted = True
     if address == AVH_REQUEST and data[2] & 3:
       self.settled[address] = "manual override"
       self.pending.pop(address, None)
@@ -260,7 +256,7 @@ class StartupPreferences:
     self.last_time = now
     if self.ignition is not True or self.started is None or self.aborted:
       return []
-    if now - self.started > 30:
+    if now - self.started > STARTUP_WINDOW:
       self.aborted = True
       return []
     # Requests run at roughly 1 Hz / 10 Hz; all other inputs must be recent.
@@ -272,9 +268,12 @@ class StartupPreferences:
         return []
     data = {a: self.frames[a][1] for a in REQUIRED}
     wheel_bits = int.from_bytes(data[WHEELS], 'little')
-    moving = any((wheel_bits >> bit) & 0x1FFF for bit in (12, 25, 38, 51))
-    if data[GEAR][3] != 4 or moving or data[THROTTLE][4] != 0:
-      self.aborted = True  # do not try again at the next traffic light
+    wheel_speeds = [(wheel_bits >> bit) & 0x1FFF for bit in (12, 25, 38, 51)]
+    parked = data[GEAR][3] == 4 and not any(wheel_speeds) and data[THROTTLE][4] == 0
+    driving_away = data[GEAR][3] == 121 and max(wheel_speeds) <= MAX_DRIVE_AWAY_WHEEL_RAW
+    if not (parked or driving_away):
+      self.stable_since = None
+      self.avh_followup = None
       return []
     rpm = int.from_bytes(data[THROTTLE][2:4], 'little') & 0x1FFF
     if rpm < 400 or not (data[STOP_STATUS][2] & 0x08):

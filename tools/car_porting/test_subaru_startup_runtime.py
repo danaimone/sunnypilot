@@ -110,30 +110,30 @@ def test_late_cold_start_checks_stability_during_hardware_wait(invalidate_before
     AVH_REQUEST, BUS, GEAR, REQUIRED, STOP_STATUS, THROTTLE, checksum,
   )
   # Ignition at 10; matching hardware arrives at 27. Waiting another 10 + 3
-  # seconds would leave no time inside the unchanged 30-second deadline.
+  # seconds should not be added after the hardware readiness wait.
   runtime = RuntimeStartupPreferences(ParamsMemory(), car_params(), 26)
   frames = {a: bytearray(8) for a in REQUIRED}
   frames[GEAR][3] = 4
   frames[THROTTLE][2:4] = (800).to_bytes(2, 'little')
   frames[STOP_STATUS][2] = 8
   proposals = []
-  for tick in range(270, 411):
+  for tick in range(270, 481):
     now = tick / 10
     for address, data in frames.items():
       data[1] = (data[1] + 1) & 15
       data[0] = checksum(address, data)
     runtime.observe([(int(now * 1e9), [(a, bytes(d), BUS) for a, d in frames.items()])])
     # Invalid data immediately before hardware readiness must still restart
-    # the three-second parked interval; that cycle then expires unsent.
+    # hardware readiness wait and stable eligibility interval.
     invalid = invalidate_before_ready and now == 36.9
     proposals.extend((now, packet) for packet in runtime.update(now, not invalid, True, [panda_state()]))
   if not invalidate_before_ready:
     assert proposals and proposals[0][0] == 37.0
     assert proposals[0][1][0] == AVH_REQUEST
-    assert all(37 <= now <= 40 for now, _ in proposals)
+    assert all(37 <= now <= 48 for now, _ in proposals)
   else:
-    assert proposals == []
-  assert runtime.policy.aborted
+    assert proposals and proposals[0][0] >= 47.0
+  assert not runtime.policy.aborted
 
 
 @pytest.mark.parametrize(
@@ -320,7 +320,7 @@ def test_new_boot_observing_off_first_still_uses_normal_ignition_edge():
   assert params.get('SubaruStartupPreferencesArmedBoot') is None
 
 
-def test_cold_boot_movement_consumes_cycle_instead_of_waiting_for_later_park():
+def test_cold_boot_drive_keeps_cycle_pending_without_rearming():
   from openpilot.sunnypilot.selfdrive.car.subaru_startup_preferences import GEAR, checksum
   params = armed_cold_params()
   IgnitionCycleTracker(BOOT_B).update(True, 30, params)
@@ -329,11 +329,11 @@ def test_cold_boot_movement_consumes_cycle_instead_of_waiting_for_later_park():
   gear[3] = 121  # Drive
   gear[0] = checksum(GEAR, gear)
   runtime.observe([(35_000_000_000, [(GEAR, bytes(gear), 1)])])
-  assert runtime.policy.aborted
+  assert not runtime.policy.aborted
   gear[3] = 4
   gear[0] = checksum(GEAR, gear)
   runtime.observe([(36_000_000_000, [(GEAR, bytes(gear), 1)])])
-  assert runtime.policy.aborted
+  assert not runtime.policy.aborted
   assert runtime.update(50, True, True, [panda_state()]) == []
   assert RuntimeStartupPreferences(params, car_params(), 36).policy is None
 

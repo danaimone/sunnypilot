@@ -33,7 +33,7 @@ class TestStartupPreferences:
     for address, data in self.frames.items():
       if address in omit:
         continue
-      data[1] = data[1] + 1 & 15
+      data[1] = (data[1] & 0xf0) | ((data[1] + 1) & 15)
       data[0] = checksum(address, data)
       self.policy.observe(address, bytes(data), BUS, self.now)
     out = self.policy.update(self.now)
@@ -128,17 +128,30 @@ class TestStartupPreferences:
       self.advance(25, omit=(missing,))
       assert self.proposals == []
 
-  def test_motion_gear_or_accelerator_abandons_entire_cycle(self):
-    for address, index, value in ((GEAR, 3, 121), (WHEELS, 2, 1), (THROTTLE, 4, 1)):
-      self.setup_method()
-      self.advance(5)
-      old = self.frames[address][index]
-      self.frames[address][index] = value
-      self.step()
-      self.frames[address][index] = old
-      self.advance(25)
-      assert self.policy.aborted
-      assert self.proposals == []
+  def test_reverse_waits_then_drive_can_request(self):
+    self.frames[GEAR][3] = 3
+    self.advance(20)
+    assert not self.proposals and not self.policy.aborted
+    self.frames[GEAR][3] = 121
+    self.frames[THROTTLE][4] = 20
+    self.advance(24)
+    assert self.proposals and not self.policy.aborted
+
+  @pytest.mark.parametrize('gear', [0, 2, 3, 137, 145, 153, 161, 169, 177])
+  def test_other_gears_wait_without_request(self, gear):
+    self.frames[GEAR][3] = gear
+    self.advance(40)
+    assert not self.proposals and not self.policy.aborted
+
+  @pytest.mark.parametrize('bit', [12, 25, 38, 51])
+  def test_each_wheel_speed_cap(self, bit):
+    self.frames[GEAR][3] = 121
+    self.frames[WHEELS] = bytearray((351 << bit).to_bytes(8, 'little'))
+    self.advance(35)
+    assert not self.proposals
+    self.frames[WHEELS] = bytearray((350 << bit).to_bytes(8, 'little'))
+    self.advance(39)
+    assert self.proposals
 
   def test_engine_not_ready(self):
     self.frames[THROTTLE][2:4] = (0).to_bytes(2, 'little')
@@ -153,9 +166,9 @@ class TestStartupPreferences:
 
   def test_timeout_never_rearms_at_later_stop(self):
     self.frames[STOP_STATUS][2] = 0
-    self.advance(31)
+    self.advance(121)
     self.frames[STOP_STATUS][2] = 8
-    self.advance(40)
+    self.advance(130)
     assert self.proposals == []
     assert self.policy.aborted
 
