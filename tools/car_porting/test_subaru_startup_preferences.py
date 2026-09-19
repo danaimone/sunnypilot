@@ -89,6 +89,7 @@ class TestStartupPreferences:
   def test_avh_press_second_frame_and_no_third(self):
     self.advance(10.1)
     original = self.policy.frames[AVH_REQUEST][1]
+    self.policy.observe(AVH_REQUEST, self.proposals[-1].data, BUS + 128, self.now + .005)
     result = self.step(.06, omit=(AVH_REQUEST,))
     assert len(result) == 1
     assert result[0].data == request_packet(AVH_REQUEST, original, counter_step=2)
@@ -98,12 +99,50 @@ class TestStartupPreferences:
   @pytest.mark.parametrize('reason', ['late', 'template', 'manual', 'ack'])
   def test_avh_followup_cancelled(self, reason):
     self.advance(10.1)
+    self.policy.observe(AVH_REQUEST, self.proposals[-1].data, BUS + 128, self.now + .005)
     if reason == 'manual':
       self.frames[AVH_REQUEST][2] = 1
     if reason == 'ack':
       self.frames[AVH_STATUS][5] = 32
     self.step(.08 if reason == 'late' else .06, omit=(AVH_REQUEST,) if reason in ('late', 'ack') else ())
     assert len([p for p in self.proposals if p.address == AVH_REQUEST]) == 1
+
+  @pytest.mark.parametrize('receipt_delay', [.018841, .019])
+  def test_avh_delayed_first_transmission_does_not_compress_second(self, receipt_delay):
+    self.advance(10.1)
+    first = self.proposals[-1]
+    self.policy.observe(AVH_REQUEST, first.data, BUS + 128, self.now + receipt_delay)
+    # Previously this produced the second frame, which was rejected on two drives.
+    assert self.step(.052, omit=(AVH_REQUEST,)) == []
+    second = self.step(.018, omit=(AVH_REQUEST,))
+    assert len(second) == 1
+    assert second[0].time - (first.time + receipt_delay) >= .05
+    assert second[0].time - first.time <= .075
+    assert AVH_REQUEST not in self.policy.settled  # receipt is not a manual override
+
+  @pytest.mark.parametrize('kind', ['missing', 'rejected', 'wrong_payload', 'wrong_bus', 'late', 'old'])
+  def test_avh_requires_timely_matching_accepted_receipt(self, kind):
+    self.advance(10.1)
+    first = self.proposals[-1]
+    if kind != 'missing':
+      bus = BUS + (192 if kind == 'rejected' else 128)
+      if kind == 'wrong_bus':
+        bus += 1
+      data = first.data if kind != 'wrong_payload' else request_packet(AVH_REQUEST, self.policy.frames[AVH_REQUEST][1], 2)
+      delay = .026 if kind == 'late' else (-.01 if kind == 'old' else .005)
+      self.policy.observe(AVH_REQUEST, data, bus, self.now + delay)
+    self.step(.06, omit=(AVH_REQUEST,))
+    self.step(.02, omit=(AVH_REQUEST,))
+    assert [p.address for p in self.proposals] == [AVH_REQUEST]
+    self.advance(15)
+    assert len([p for p in self.proposals if p.address == AVH_REQUEST]) == 1
+
+  def test_duplicate_receipt_cannot_move_followup_clock(self):
+    self.advance(10.1)
+    first = self.proposals[-1]
+    self.policy.observe(AVH_REQUEST, first.data, BUS + 128, self.now + .005)
+    self.policy.observe(AVH_REQUEST, first.data, BUS + 128, self.now + .02)
+    assert len(self.step(.06, omit=(AVH_REQUEST,))) == 1
 
   def test_manual_override_before_startup(self):
     self.frames[AVH_REQUEST][2] = 1

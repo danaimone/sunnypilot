@@ -210,6 +210,7 @@ class StartupPreferences:
     self.aborted = False
     self.last_time = None
     self.avh_followup = None
+    self.avh_tx_confirmed_at = None
 
   def set_ignition(self, on: bool, now: float):
     if not on:
@@ -220,12 +221,25 @@ class StartupPreferences:
       self.pending.clear()
       self.aborted = False
       self.avh_followup = None
+      self.avh_tx_confirmed_at = None
     elif self.ignition is False:
       self.started = now
       self.frames.clear()
     self.ignition = on
 
   def observe(self, address: int, data: bytes, bus: int, now: float):
+    if address == AVH_REQUEST and bus in (BUS + 128, BUS + 192):
+      # Returned/rejected packets are panda metadata, not factory button input.
+      # Anchor the follow-up to the first accepted transmission, since unequal
+      # host-to-panda delays can compress two publication times below 45 ms.
+      if self.avh_followup is not None and self.ignition is True:
+        sent, _, template = self.avh_followup
+        if data == request_packet(AVH_REQUEST, template) and now >= sent:
+          if bus == BUS + 192 or now - sent > 0.025:
+            self.avh_followup = None
+          elif self.avh_tx_confirmed_at is None:
+            self.avh_tx_confirmed_at = now
+      return
     if bus != BUS or address not in REQUIRED or self.ignition is not True:
       return
     if len(data) != 8 or checksum(address, data) != data[0]:
@@ -293,13 +307,15 @@ class StartupPreferences:
         del self.pending[address]
     # One AVH button press consists of at most two frames, 50 ms apart. A new
     # factory template, manual action, acknowledgement, or late scheduler drops
-    # the second frame; it is never retried later in the ignition cycle.
+    # the second frame; it is never retried later in the ignition cycle. Wait
+    # at least 50 ms after the accepted TX receipt, while retaining the original
+    # 75 ms publication deadline to bound late delivery and template age.
     if self.avh_followup is not None:
       sent, template_time, template = self.avh_followup
       age = now - sent
       if desired[AVH_REQUEST] or AVH_REQUEST not in self.pending or self.frames[AVH_REQUEST][0] != template_time or age > 0.075:
         self.avh_followup = None
-      elif age >= 0.05:
+      elif self.avh_tx_confirmed_at is not None and now - self.avh_tx_confirmed_at >= 0.05:
         self.avh_followup = None
         return [Proposal(now, AVH_REQUEST, request_packet(AVH_REQUEST, template, counter_step=2))]
     for address in (AVH_REQUEST, STOP_REQUEST):
@@ -318,6 +334,7 @@ class StartupPreferences:
       self.pending[address] = now
       if address == AVH_REQUEST:
         self.avh_followup = (now, self.frames[address][0], data[address])
+        self.avh_tx_confirmed_at = None
       return [Proposal(now, address, request_packet(address, data[address]))]
     return []
 

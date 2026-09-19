@@ -24,3 +24,19 @@ capture is checked, the real-vehicle correction is unverified.
 
 Local checks cover recorded Outback and Crosstrek firmware, missing/unknown ECU
 responses, cache handling, the unchanged default scan, and startup-request policy.
+
+## AVH follow-up timing
+
+The AVH follow-up now requires an exact accepted-transmit receipt for its first
+frame (panda bus 129). It waits at least 50 ms from that receipt, retaining the
+75 ms deadline from the first publication. A rejected first frame, receipt more
+than 25 ms late, stale template, manual input, or missing receipt prevents the
+follow-up. There are still at most two frames and no automatic toggle retries.
+Panda's existing 45–80 ms spacing and other safety limits are unchanged.
+
+September 18 recordings showed two second-frame rejections among twelve starts.
+Their logged receipt gaps were approximately 39–40 ms despite host publication
+gaps of approximately 51 ms. A follow-up-only replay anchored to each recorded
+first publication schedules a second frame for all twelve under the revised
+policy, 51.9–55.1 ms after its receipt. This is host-policy replay evidence, not
+proof that newly timed requests have been accepted by the real vehicle.
