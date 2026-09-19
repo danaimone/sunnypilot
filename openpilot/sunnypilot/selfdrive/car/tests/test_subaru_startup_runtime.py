@@ -1,0 +1,378 @@
+from types import SimpleNamespace
+
+import pytest
+
+from openpilot.sunnypilot.selfdrive.car.subaru_startup_preferences import (
+  IgnitionCycleTracker,
+  RuntimeStartupPreferences,
+)
+
+
+from opendbc.car.subaru.values import SubaruFlags
+from opendbc.sunnypilot.car.subaru.startup_preferences import Proposal
+from opendbc.sunnypilot.car.subaru.values_ext import SubaruFlagsSP
+
+
+def make_runtime(params, cp, now, replay_mode=False):
+  cp_sp = SimpleNamespace(flags=SubaruFlagsSP.ENABLE_AVH_AT_STARTUP | SubaruFlagsSP.DISABLE_START_STOP_AT_STARTUP)
+  return RuntimeStartupPreferences(params, cp, cp_sp, now, replay_mode=replay_mode)
+
+
+class PolicySpy:
+  def __init__(self):
+    self.update_calls = []
+    self.observe_calls = []
+    self.result = []
+
+  def update(self, now, *, requests_allowed=True):
+    self.update_calls.append((now, requests_allowed))
+    return self.result if requests_allowed else []
+
+  def observe(self, *args):
+    self.observe_calls.append(args)
+
+
+class ParamsMemory:
+  def __init__(self):
+    self.values = {'SubaruEnableAVHAtStartup': True, 'SubaruStartupPreferencesCycle': '10.0'}
+
+  def get(self, key):
+    return self.values.get(key)
+
+  def get_bool(self, key):
+    return bool(self.get(key))
+
+  def put(self, key, value, block=False):
+    assert block
+    self.values[key] = value
+
+  def remove(self, key):
+    self.values.pop(key, None)
+
+
+def car_params():
+  return SimpleNamespace(
+    brand='subaru', flags=SubaruFlags.GLOBAL_GEN2 | SubaruFlags.LKAS_ANGLE, dashcamOnly=False,
+    carFingerprint='SUBARU_OUTBACK_2023', passive=False, openpilotLongitudinalControl=False,
+    safetyConfigs=[SimpleNamespace(safetyModel="subaru", safetyParam=9)]
+  )
+
+
+def panda_state(**kwargs):
+  return SimpleNamespace(**({'ignitionLine': True, 'ignitionCan': False, 'safetyModel': 'subaru', 'safetyParam': 9,
+                            'safetyRxChecksInvalid': False, 'faults': [], 'heartbeatLost': False} | kwargs))
+
+
+def test_runtime_claims_cycle_once_before_safety_permission():
+  params = ParamsMemory()
+  cp = car_params()
+  first = make_runtime(params, cp, 12)
+  assert first.policy.started == 10
+  assert cp.safetyConfigs[0].safetyParam == 9
+  assert params.get('SubaruStartupPreferencesConsumed') == '10.0'
+  # A fresh card with the original config cannot reuse that token.
+  cp = car_params()
+  assert make_runtime(params, cp, 13).policy is None
+  assert cp.safetyConfigs[0].safetyParam == 9
+
+
+@pytest.mark.parametrize('change', ['disabled', 'replay', 'other_car', 'passive', 'longitudinal', 'other_safety', 'multi_panda'])
+def test_unsupported_modes_do_not_claim_or_enable(change):
+  params, cp = ParamsMemory(), car_params()
+  if change == 'disabled':
+    params.values['SubaruEnableAVHAtStartup'] = False
+  if change == 'other_car':
+    cp.carFingerprint = 'SUBARU_ASCENT_2023'
+  if change == 'passive':
+    cp.passive = True
+  if change == 'longitudinal':
+    cp.openpilotLongitudinalControl = True
+  if change == 'other_safety':
+    cp.safetyConfigs[0].safetyModel = 'noOutput'
+  if change == 'multi_panda':
+    cp.safetyConfigs.append(SimpleNamespace(safetyModel="subaru", safetyParam=9))
+  runtime = make_runtime(params, cp, 12, replay_mode=change == 'replay')
+  assert runtime.policy is None
+  assert params.get('SubaruStartupPreferencesConsumed') is None
+
+
+@pytest.mark.parametrize('token', [None, '', 'not-a-time', 'nan', 'inf', '100.0', '-50.0'])
+def test_invalid_or_old_ignition_token_cannot_arm(token):
+  params = ParamsMemory()
+  params.values['SubaruStartupPreferencesCycle'] = token
+  assert make_runtime(params, car_params(), 12).policy is None
+
+
+def test_no_request_before_hardware_mode_is_stable():
+  runtime = make_runtime(ParamsMemory(), car_params(), 12)
+  runtime.policy = PolicySpy()
+  runtime.policy.result = [Proposal(25, 0x6BB, b'12345678')]
+  assert runtime.update(12, True, True, [panda_state(safetyParam=1)]) == []
+  assert runtime.update(14, True, True, [panda_state()]) == []
+  assert runtime.update(23.9, True, True, [panda_state()]) == []
+  assert runtime.policy.update_calls == [(14, False), (23.9, False)]
+  assert runtime.update(24, True, True, [panda_state()]) == [(0x6BB, b'12345678', 1)]
+  assert runtime.policy.update_calls == [(14, False), (23.9, False), (24, True)]
+
+
+@pytest.mark.parametrize('invalidate_before_ready', [False, True])
+def test_late_cold_start_checks_stability_during_hardware_wait(invalidate_before_ready):
+  from opendbc.sunnypilot.car.subaru.startup_preferences import (
+    AVH_REQUEST, BUS, GEAR, REQUIRED, STOP_STATUS, THROTTLE, checksum,
+  )
+  # Ignition at 10; matching hardware arrives at 27. Waiting another 10 + 3
+  # seconds should not be added after the hardware readiness wait.
+  runtime = make_runtime(ParamsMemory(), car_params(), 26)
+  frames = {a: bytearray(8) for a in REQUIRED}
+  frames[GEAR][3] = 4
+  frames[THROTTLE][2:4] = (800).to_bytes(2, 'little')
+  frames[STOP_STATUS][2] = 8
+  proposals = []
+  for tick in range(270, 481):
+    now = tick / 10
+    for address, data in frames.items():
+      data[1] = (data[1] + 1) & 15
+      data[0] = checksum(address, data)
+    runtime.observe([(int(now * 1e9), [(a, bytes(d), BUS) for a, d in frames.items()])])
+    # Invalid data immediately before hardware readiness must still restart
+    # hardware readiness wait and stable eligibility interval.
+    invalid = invalidate_before_ready and now == 36.9
+    proposals.extend((now, packet) for packet in runtime.update(now, not invalid, True, [panda_state()]))
+  if not invalidate_before_ready:
+    assert proposals and proposals[0][0] == 37.0
+    assert proposals[0][1][0] == AVH_REQUEST
+    assert all(37 <= now <= 48 for now, _ in proposals)
+  else:
+    assert proposals and proposals[0][0] >= 47.0
+  assert not runtime.policy.aborted
+
+
+@pytest.mark.parametrize(
+  'can_valid,pandas_valid,pandas',
+  [(False, True, [panda_state()]), (True, False, [panda_state()]), (True, True, []), (True, True, [panda_state(), panda_state()])],
+)
+def test_invalid_vehicle_state_resets_readiness(can_valid, pandas_valid, pandas):
+  runtime = make_runtime(ParamsMemory(), car_params(), 12)
+  runtime.policy = PolicySpy()
+  runtime.safety_ready_since = 12
+  assert runtime.update(25, can_valid, pandas_valid, pandas) == []
+  assert runtime.safety_ready_since is None
+  assert runtime.policy.update_calls == []
+
+
+def test_ignition_off_aborts_without_request():
+  runtime = make_runtime(ParamsMemory(), car_params(), 12)
+  assert runtime.update(25, True, True, [panda_state(ignitionLine=False)]) == []
+  assert runtime.policy.aborted
+
+
+def test_invalid_panda_rx_checks_prevent_proposals():
+  runtime = make_runtime(ParamsMemory(), car_params(), 12)
+  runtime.policy = PolicySpy()
+  runtime.safety_ready_since = 12
+  runtime.policy.stable_since = 20
+  assert runtime.update(25, True, True, [panda_state(safetyRxChecksInvalid=True)]) == []
+  assert runtime.policy.stable_since is None
+  assert runtime.policy.update_calls == []
+
+
+def test_raw_packet_timestamps_are_preserved():
+  runtime = make_runtime(ParamsMemory(), car_params(), 12)
+  runtime.policy = PolicySpy()
+  runtime.observe([(12_345_000_000, [(0x390, b'12345678', 1)])])
+  assert runtime.policy.observe_calls == [(0x390, b'12345678', 1, 12.345)]
+
+
+def test_manager_requires_observed_off_then_on_and_debounces():
+  params, tracker = ParamsMemory(), IgnitionCycleTracker()
+  tracker.update(True, 10, params)  # attach mid-ignition
+  assert params.get('SubaruStartupPreferencesCycle') is None
+  tracker.update(False, 11, params)
+  tracker.update(True, 11.5, params)  # brief ignition glitch
+  assert params.get('SubaruStartupPreferencesCycle') is None
+  tracker.update(False, 12, params)
+  tracker.update(True, 15, params)
+  assert params.get('SubaruStartupPreferencesCycle') == '15'
+  tracker.update(True, 16, params)
+  assert params.get('SubaruStartupPreferencesCycle') == '15'
+  tracker.update(False, 20, params)
+  assert params.get('SubaruStartupPreferencesCycle') is None
+
+
+def test_unknown_panda_state_cannot_create_ignition_edge():
+  params, tracker = ParamsMemory(), IgnitionCycleTracker()
+  tracker.update(False, 0, params)
+  tracker.update(None, 5, params)
+  tracker.update(True, 10, params)
+  assert params.get('SubaruStartupPreferencesCycle') is None
+
+
+BOOT_A = '11111111-1111-4111-8111-111111111111'
+BOOT_B = '22222222-2222-4222-8222-222222222222'
+BOOT_C = '33333333-3333-4333-8333-333333333333'
+
+
+def armed_cold_params():
+  params = ParamsMemory()
+  tracker = IgnitionCycleTracker(BOOT_A)
+  tracker.update(False, 500, params)
+  assert params.get('SubaruStartupPreferencesArmedBoot') is None
+  tracker.update(False, 501.99, params)
+  assert params.get('SubaruStartupPreferencesArmedBoot') is None
+  tracker.update(False, 502, params)
+  assert params.get('SubaruStartupPreferencesArmedBoot') == BOOT_A
+  return params
+
+
+def test_cold_boot_consumes_persisted_off_permission_once():
+  params = armed_cold_params()
+  tracker = IgnitionCycleTracker(BOOT_B)
+  tracker.update(None, 25, params)  # panda has not reported ignition yet
+  assert params.get('SubaruStartupPreferencesArmedBoot') == BOOT_A
+  tracker.update(True, 30, params)
+  assert params.get('SubaruStartupPreferencesArmedBoot') is None
+  assert params.get('SubaruStartupPreferencesCycle') == '30'
+  cp = car_params()
+  runtime = make_runtime(params, cp, 34)
+  assert runtime.policy.started == 30
+  assert cp.safetyConfigs[0].safetyParam == 9
+  assert make_runtime(params, car_params(), 35).policy is None
+  # A further full reboot while ignition is still on has no permission left.
+  params.remove('SubaruStartupPreferencesCycle')
+  params.remove('SubaruStartupPreferencesConsumed')
+  IgnitionCycleTracker(BOOT_C).update(True, 30, params)
+  assert params.get('SubaruStartupPreferencesCycle') is None
+
+
+@pytest.mark.parametrize('boot,now,enabled', [
+  (BOOT_A, 30, True),  # manager restart in the same kernel boot
+  (BOOT_B, 120.001, True),  # late startup
+  (BOOT_B, -1, True),
+  (BOOT_B, 30, False),
+  (None, 30, True),
+  ('invalid', 30, True),
+])
+def test_cold_boot_rejects_unqualified_start_and_consumes_old_permission(boot, now, enabled):
+  params = armed_cold_params()
+  params.values['SubaruEnableAVHAtStartup'] = enabled
+  IgnitionCycleTracker(boot).update(True, now, params)
+  assert params.get('SubaruStartupPreferencesCycle') is None
+  assert params.get('SubaruStartupPreferencesArmedBoot') is None
+
+
+@pytest.mark.parametrize('saved', [None, '', 'not-a-boot-id', 'null', BOOT_B])
+def test_missing_invalid_or_same_boot_permission_cannot_arm(saved):
+  params = ParamsMemory()
+  params.values['SubaruStartupPreferencesArmedBoot'] = saved
+  IgnitionCycleTracker(BOOT_B).update(True, 30, params)
+  assert params.get('SubaruStartupPreferencesCycle') is None
+
+
+def test_unknown_state_after_observed_off_invalidates_permission():
+  params = ParamsMemory()
+  tracker = IgnitionCycleTracker(BOOT_A)
+  tracker.update(False, 10, params)
+  tracker.update(False, 12, params)
+  assert params.get('SubaruStartupPreferencesArmedBoot') == BOOT_A
+  tracker.update(None, 13, params)
+  assert params.get('SubaruStartupPreferencesArmedBoot') is None
+  tracker.update(True, 14, params)
+  assert params.get('SubaruStartupPreferencesCycle') is None
+
+
+def test_cold_permission_consumed_before_cycle_publication_failure():
+  params = armed_cold_params()
+  original_put = params.put
+
+  def fail_cycle_put(key, value, block=False):
+    if key == 'SubaruStartupPreferencesCycle':
+      raise OSError('simulated interrupted cycle write')
+    original_put(key, value, block=block)
+
+  params.put = fail_cycle_put
+  with pytest.raises(OSError):
+    IgnitionCycleTracker(BOOT_B).update(True, 30, params)
+  assert params.get('SubaruStartupPreferencesArmedBoot') is None
+  params.put = original_put
+  IgnitionCycleTracker(BOOT_C).update(True, 30, params)
+  assert params.get('SubaruStartupPreferencesCycle') is None
+
+
+def test_stable_off_arms_once_and_disabling_clears_permission():
+  params = ParamsMemory()
+  writes = []
+  original_put = params.put
+
+  def record_put(key, value, block=False):
+    writes.append(key)
+    original_put(key, value, block=block)
+
+  params.put = record_put
+  tracker = IgnitionCycleTracker(BOOT_A)
+  for now in range(10):
+    tracker.update(False, now, params)
+  assert writes.count('SubaruStartupPreferencesArmedBoot') == 1
+  params.values['SubaruEnableAVHAtStartup'] = False
+  tracker.update(False, 10, params)
+  assert params.get('SubaruStartupPreferencesArmedBoot') is None
+
+
+def test_new_boot_observing_off_first_still_uses_normal_ignition_edge():
+  params = armed_cold_params()
+  tracker = IgnitionCycleTracker(BOOT_B)
+  tracker.update(False, 30, params)
+  assert params.get('SubaruStartupPreferencesArmedBoot') is None
+  tracker.update(True, 33, params)
+  assert params.get('SubaruStartupPreferencesCycle') == '33'
+  assert params.get('SubaruStartupPreferencesArmedBoot') is None
+
+
+def test_cold_boot_drive_keeps_cycle_pending_without_rearming():
+  from opendbc.sunnypilot.car.subaru.startup_preferences import GEAR, checksum
+  params = armed_cold_params()
+  IgnitionCycleTracker(BOOT_B).update(True, 30, params)
+  runtime = make_runtime(params, car_params(), 34)
+  gear = bytearray(8)
+  gear[3] = 121  # Drive
+  gear[0] = checksum(GEAR, gear)
+  runtime.observe([(35_000_000_000, [(GEAR, bytes(gear), 1)])])
+  assert not runtime.policy.aborted
+  gear[3] = 4
+  gear[0] = checksum(GEAR, gear)
+  runtime.observe([(36_000_000_000, [(GEAR, bytes(gear), 1)])])
+  assert not runtime.policy.aborted
+  assert runtime.update(50, True, True, [panda_state()]) == []
+  assert make_runtime(params, car_params(), 36).policy is None
+
+
+def test_failed_persistent_permission_removal_cannot_publish_cycle():
+  params = armed_cold_params()
+  original_remove = params.remove
+
+  def failed_arm_remove(key):
+    if key != 'SubaruStartupPreferencesArmedBoot':
+      original_remove(key)
+
+  params.remove = failed_arm_remove
+  IgnitionCycleTracker(BOOT_B).update(True, 30, params)
+  assert params.get('SubaruStartupPreferencesCycle') is None
+  assert params.get('SubaruStartupPreferencesArmedBoot') == BOOT_A
+
+
+@pytest.mark.parametrize('platform', ['SUBARU_OUTBACK_2023', 'SUBARU_CROSSTREK_2026'])
+def test_supported_platforms_require_opt_in(platform):
+  params, cp = ParamsMemory(), car_params()
+  cp.carFingerprint = platform
+  params.values['SubaruEnableAVHAtStartup'] = False
+  assert make_runtime(params, cp, 12).policy is None
+  params.values['SubaruEnableAVHAtStartup'] = True
+  assert make_runtime(params, cp, 12).policy is not None
+  assert cp.safetyConfigs[0].safetyParam == 9
+
+
+@pytest.mark.parametrize('state', [panda_state(faults=['interruptRateCan2']), panda_state(heartbeatLost=True)])
+def test_hardware_fault_aborts_cycle(state):
+  runtime = make_runtime(ParamsMemory(), car_params(), 12)
+  assert runtime.update(25, True, True, [state]) == []
+  assert runtime.policy.aborted
+  assert runtime.update(26, True, True, [panda_state()]) == []

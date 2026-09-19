@@ -10,6 +10,7 @@ from openpilot.cereal import custom, messaging
 from opendbc.car.structs import car
 from opendbc.car.hyundai.values import CAR as HYUNDAI_CAR, UNSUPPORTED_LONGITUDINAL_CAR
 from opendbc.car.subaru.values import CAR as SUBARU_CAR, SubaruFlags
+from opendbc.sunnypilot.car.subaru.startup_preferences import startup_preferences_supported
 from opendbc.sunnypilot.car.tesla.values import TeslaFlagsSP
 from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
@@ -41,6 +42,7 @@ CAPABILITY_FIELDS = (
   "stock_longitudinal",
   "device_type",
   "subaru_has_sng",
+  "subaru_startup_preferences",
   "hyundai_alpha_long_available",
 )
 
@@ -63,6 +65,7 @@ CAPABILITY_LABELS: dict[str, str] = {
   "stock_longitudinal": "stock longitudinal",
   "device_type": "Device type",
   "subaru_has_sng": "Subaru Stop-and-Go available",
+  "subaru_startup_preferences": "Subaru startup settings available",
   "hyundai_alpha_long_available": "Hyundai Alpha Longitudinal available",
 }
 
@@ -99,6 +102,7 @@ def _resolve_brand_capabilities(caps: dict, bundle_platform: str, CP) -> None:
       caps["hyundai_alpha_long_available"] = bool(CP.alphaLongitudinalAvailable)
 
   elif brand == "subaru":
+    caps["subaru_startup_preferences"] = CP is not None and startup_preferences_supported(CP)
     if bundle_platform:
       try:
         flags = SUBARU_CAR[bundle_platform].config.flags

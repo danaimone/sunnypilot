@@ -2215,6 +2215,38 @@
       "description": "",
       "items": [
         {
+          "key": "SubaruEnableAVHAtStartup",
+          "widget": "toggle",
+          "title": "Enable AVH at startup",
+          "description": "Enable Auto Vehicle Hold (AVH) once at each vehicle startup. Your later button changes are respected. Applies from the next startup, including after comma power-off. Leave the comma connected briefly after switching the vehicle off. Requires a recognized Subaru with supported angle steering; not available in dashcam-only mode.",
+          "enablement": [
+            {
+              "type": "offroad_only"
+            },
+            {
+              "type": "capability",
+              "field": "subaru_startup_preferences",
+              "equals": true
+            }
+          ]
+        },
+        {
+          "key": "SubaruDisableStartStopAtStartup",
+          "widget": "toggle",
+          "title": "Disable auto start-stop at startup",
+          "description": "Disable automatic engine start-stop once at each vehicle startup. Your later button changes are respected. Applies from the next startup, including after comma power-off. Leave the comma connected briefly after switching the vehicle off. Requires a recognized Subaru with supported angle steering; not available in dashcam-only mode.",
+          "enablement": [
+            {
+              "type": "offroad_only"
+            },
+            {
+              "type": "capability",
+              "field": "subaru_startup_preferences",
+              "equals": true
+            }
+          ]
+        },
+        {
           "key": "SubaruStopAndGo",
           "widget": "toggle",
           "title": "Stop and Go (Beta)",

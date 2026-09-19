@@ -4,12 +4,15 @@ Copyright (c) 2021-, Haibin Wen, sunnypilot, and a number of other contributors.
 This file is part of sunnypilot and is licensed under the MIT License.
 See the LICENSE.md file in the root directory for more details.
 """
+import os
+import time
 from typing import Any
 
 from opendbc.car import structs
 from opendbc.car.interfaces import CarInterfaceBase
 from openpilot.common.params import Params
 from openpilot.common.swaglog import cloudlog
+from openpilot.sunnypilot.selfdrive.car.subaru_startup_preferences import startup_cycle_available
 from openpilot.sunnypilot.selfdrive.controls.lib.nnlc.helpers import get_nn_model_path
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.helpers import set_speed_limit_assist_availability
 
@@ -122,6 +125,8 @@ def initialize_params(params) -> list[dict[str, Any]]:
 
   # subaru
   keys.extend([
+    "SubaruEnableAVHAtStartup",
+    "SubaruDisableStartStopAtStartup",
     "SubaruStopAndGo",
     "SubaruStopAndGoManualParkingBrake",
   ])
@@ -138,4 +143,5 @@ def initialize_params(params) -> list[dict[str, Any]]:
     "ToyotaStopAndGoHack",
   ])
 
-  return [{k: params.get(k, return_default=True)} for k in keys]
+  authorized = "REPLAY" not in os.environ and startup_cycle_available(params, time.monotonic())
+  return [{k: params.get(k, return_default=True)} for k in keys] + [{"SubaruStartupCycleAuthorized": authorized}]
