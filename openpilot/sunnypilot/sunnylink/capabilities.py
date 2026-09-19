@@ -41,6 +41,7 @@ CAPABILITY_FIELDS = (
   "stock_longitudinal",
   "device_type",
   "subaru_has_sng",
+  "subaru_startup_preferences",
   "hyundai_alpha_long_available",
 )
 
@@ -63,6 +64,7 @@ CAPABILITY_LABELS: dict[str, str] = {
   "stock_longitudinal": "stock longitudinal",
   "device_type": "Device type",
   "subaru_has_sng": "Subaru Stop-and-Go available",
+  "subaru_startup_preferences": "Subaru startup settings available",
   "hyundai_alpha_long_available": "Hyundai Alpha Longitudinal available",
 }
 
@@ -99,6 +101,8 @@ def _resolve_brand_capabilities(caps: dict, bundle_platform: str, CP) -> None:
       caps["hyundai_alpha_long_available"] = bool(CP.alphaLongitudinalAvailable)
 
   elif brand == "subaru":
+    platform = bundle_platform or (str(CP.carFingerprint) if CP is not None else "")
+    caps["subaru_startup_preferences"] = platform in ("SUBARU_OUTBACK_2023", "SUBARU_CROSSTREK_2026")
     if bundle_platform:
       try:
         flags = SUBARU_CAR[bundle_platform].config.flags

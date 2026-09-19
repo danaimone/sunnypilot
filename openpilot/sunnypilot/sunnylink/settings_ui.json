@@ -2215,6 +2215,59 @@
       "description": "",
       "items": [
         {
+          "key": "SubaruStartupPreferences",
+          "widget": "toggle",
+          "title": "Enable AVH and disable start-stop at startup",
+          "description": "At each vehicle startup, enable Auto Vehicle Hold (AVH) and disable automatic engine start-stop. Your later button changes are respected. Applies from the next startup.",
+          "enablement": [
+            {
+              "type": "offroad_only"
+            },
+            {
+              "type": "capability",
+              "field": "subaru_startup_preferences",
+              "equals": true
+            }
+          ]
+        },
+        {
+          "key": "SubaruStartupPreferencesColdBoot",
+          "widget": "toggle",
+          "title": "Apply after comma power-off",
+          "description": "Also apply the startup settings after the comma fully powers off. Leave the comma connected briefly after switching the vehicle off so it can remember the next startup.",
+          "enablement": [
+            {
+              "type": "offroad_only"
+            },
+            {
+              "type": "capability",
+              "field": "subaru_startup_preferences",
+              "equals": true
+            },
+            {
+              "type": "param",
+              "key": "SubaruStartupPreferences",
+              "equals": true
+            }
+          ]
+        },
+        {
+          "key": "SubaruNonObdFirmwareQuery",
+          "widget": "toggle",
+          "title": "Subaru without OBD connection",
+          "description": "Enable only when this Subaru installation has no connection to the vehicle OBD port. Query vehicle firmware through the camera harness without switching to the OBD connection. Leave off when OBD is connected. Applies from the next startup.",
+          "enablement": [
+            {
+              "type": "offroad_only"
+            },
+            {
+              "type": "capability",
+              "field": "subaru_startup_preferences",
+              "equals": true
+            }
+          ]
+        },
+        {
           "key": "SubaruStopAndGo",
           "widget": "toggle",
           "title": "Stop and Go (Beta)",
